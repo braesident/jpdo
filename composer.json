@@ -9,7 +9,7 @@
     }
   ],
   "require": {
-    "php": ">=5.6.0",
+    "php": ">=8.0",
     "braesident/blowfish": "^1.0"
   },
   "require-dev": {
