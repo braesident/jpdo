@@ -21,10 +21,6 @@
     "sort-packages": true
   },
   "autoload": {
-    "files": [
-      "src/JPdo.php",
-      "src/JPdoStatement.php"
-    ],
     "psr-4": {
       "Braesident\\JPdo\\": "src/"
     }
