@@ -105,4 +105,14 @@ final class JPdo extends PDO
 
     return $parts ? ';'.implode(';', $parts) : '';
   }
+
+  public function isMysql(): bool
+  {
+    return $this->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
+  }
+
+  public function isSqlsrv(): bool
+  {
+    return $this->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlsrv';
+  }
 }
