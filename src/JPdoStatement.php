@@ -11,6 +11,8 @@ final class JPdoStatement extends PDOStatement
 {
   private array $_encCols = [];
 
+  private array $duplicateParams = [];
+
   private ?Blowfish $blowfish;
 
   public function encrypt(array $columns, ?Blowfish $blowfish = null): self
@@ -25,14 +27,9 @@ final class JPdoStatement extends PDOStatement
 
   public function execute(?array $params = null): bool
   {
-    if (null !== $this->blowfish) {
-      foreach ($this->_encCols as $c) {
-        if (isset($params[$c]) && ! empty($params[$c])) {
-          $params[$c] = $this->blowfish->Encrypt($params[$c]);
-        } elseif (isset($params[':'.$c]) && ! empty($params[':'.$c])) {
-          $params[':'.$c] = $this->blowfish->Encrypt($params[':'.$c]);
-        }
-      }
+    if (null !== $params) {
+      $params = $this->expandDuplicateParams($params);
+      $params = $this->encryptParams($params);
     }
 
     return parent::execute($params);
@@ -124,5 +121,77 @@ final class JPdoStatement extends PDOStatement
     $this->blowfish = $blowfish;
 
     return $this;
+  }
+
+  public function setDuplicateParams(array $duplicateParams): self
+  {
+    $this->duplicateParams = $duplicateParams;
+
+    return $this;
+  }
+
+  private function expandDuplicateParams(array $params): array
+  {
+    if (empty($this->duplicateParams)) {
+      return $params;
+    }
+
+    foreach ($this->duplicateParams as $base => $duplicates) {
+      $baseKey      = $base;
+      $baseKeyColon = ':'.$base;
+      $hasBase      = \array_key_exists($baseKey, $params);
+      $hasBaseColon = \array_key_exists($baseKeyColon, $params);
+
+      if ( ! $hasBase && ! $hasBaseColon) {
+        continue;
+      }
+
+      $sourceKey = $hasBase ? $baseKey : $baseKeyColon;
+      $prefix    = $hasBase ? '' : ':';
+      $value     = $params[$sourceKey];
+
+      foreach ($duplicates as $duplicate) {
+        $dupKey = $prefix.$duplicate;
+        $altKey = ':' === $prefix ? $duplicate : ':'.$duplicate;
+
+        if ( ! \array_key_exists($dupKey, $params) && ! \array_key_exists($altKey, $params)) {
+          $params[$dupKey] = $value;
+        }
+      }
+
+      unset($params[$baseKey], $params[$baseKeyColon]);
+    }
+
+    return $params;
+  }
+
+  private function encryptParams(array $params): array
+  {
+    if (null === $this->blowfish || empty($this->_encCols)) {
+      return $params;
+    }
+
+    foreach ($this->_encCols as $c) {
+      $targets = [$c];
+
+      if (isset($this->duplicateParams[$c])) {
+        $targets = array_merge($targets, $this->duplicateParams[$c]);
+      }
+
+      foreach ($targets as $target) {
+        if (\array_key_exists($target, $params) && ! empty($params[$target])) {
+          $params[$target] = $this->blowfish->Encrypt($params[$target]);
+
+          continue;
+        }
+
+        $colonTarget = ':'.$target;
+        if (\array_key_exists($colonTarget, $params) && ! empty($params[$colonTarget])) {
+          $params[$colonTarget] = $this->blowfish->Encrypt($params[$colonTarget]);
+        }
+      }
+    }
+
+    return $params;
   }
 }

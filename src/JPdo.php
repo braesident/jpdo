@@ -70,10 +70,207 @@ final class JPdo extends PDO
 
   public function prepare(string $query, array $options = []): JPdoStatement|false
   {
+    [$query, $duplicateParams] = self::replaceDuplicatePlaceholders($query);
+
     /** @var JPdoStatement $stmt */
     $stmt = parent::prepare($query, $options);
+    if (false === $stmt) {
+      return false;
+    }
 
-    return $stmt->setBlowfish($this->blowfish);
+    $stmt->setBlowfish($this->blowfish);
+    if ($duplicateParams) {
+      $stmt->setDuplicateParams($duplicateParams);
+    }
+
+    return $stmt;
+  }
+
+  private static function replaceDuplicatePlaceholders(string $query): array
+  {
+    [$placeholders, $counts] = self::findNamedPlaceholders($query);
+
+    if (empty($placeholders)) {
+      return [$query, []];
+    }
+
+    $hasDuplicates = false;
+    foreach ($counts as $count) {
+      if ($count > 1) {
+        $hasDuplicates = true;
+        break;
+      }
+    }
+
+    if ( ! $hasDuplicates) {
+      return [$query, []];
+    }
+
+    $usedNames = [];
+    foreach (array_keys($counts) as $name) {
+      $usedNames[$name] = true;
+    }
+
+    $duplicateParams = [];
+    $occurrenceIndex = [];
+    $rebuilt = '';
+    $last = 0;
+
+    foreach ($placeholders as $placeholder) {
+      [$pos, $len, $name] = $placeholder;
+
+      $rebuilt .= substr($query, $last, $pos - $last);
+
+      if ($counts[$name] > 1) {
+        $index = $occurrenceIndex[$name] ?? 0;
+        while (true) {
+          $candidate = $name.'_'.$index;
+          if ( ! isset($usedNames[$candidate])) {
+            break;
+          }
+          $index++;
+        }
+
+        $occurrenceIndex[$name] = $index + 1;
+        $usedNames[$candidate] = true;
+        $duplicateParams[$name][] = $candidate;
+
+        $rebuilt .= ':'.$candidate;
+      } else {
+        $rebuilt .= substr($query, $pos, $len);
+      }
+
+      $last = $pos + $len;
+    }
+
+    $rebuilt .= substr($query, $last);
+
+    return [$rebuilt, $duplicateParams];
+  }
+
+  private static function findNamedPlaceholders(string $query): array
+  {
+    $placeholders = [];
+    $counts = [];
+
+    $length = strlen($query);
+    $inSingle = false;
+    $inDouble = false;
+    $inBacktick = false;
+    $inLineComment = false;
+    $inBlockComment = false;
+
+    for ($i = 0; $i < $length; $i++) {
+      $ch = $query[$i];
+      $next = $i + 1 < $length ? $query[$i + 1] : '';
+
+      if ($inLineComment) {
+        if ($ch === "\n") {
+          $inLineComment = false;
+        }
+        continue;
+      }
+
+      if ($inBlockComment) {
+        if ($ch === '*' && $next === '/') {
+          $inBlockComment = false;
+          $i++;
+        }
+        continue;
+      }
+
+      if ($inSingle) {
+        if ($ch === "'") {
+          if ($next === "'") {
+            $i++;
+            continue;
+          }
+          $inSingle = false;
+        }
+        continue;
+      }
+
+      if ($inDouble) {
+        if ($ch === '"') {
+          if ($next === '"') {
+            $i++;
+            continue;
+          }
+          $inDouble = false;
+        }
+        continue;
+      }
+
+      if ($inBacktick) {
+        if ($ch === '`') {
+          if ($next === '`') {
+            $i++;
+            continue;
+          }
+          $inBacktick = false;
+        }
+        continue;
+      }
+
+      if ($ch === "'") {
+        $inSingle = true;
+        continue;
+      }
+
+      if ($ch === '"') {
+        $inDouble = true;
+        continue;
+      }
+
+      if ($ch === '`') {
+        $inBacktick = true;
+        continue;
+      }
+
+      if ($ch === '-' && $next === '-') {
+        $inLineComment = true;
+        $i++;
+        continue;
+      }
+
+      if ($ch === '/' && $next === '*') {
+        $inBlockComment = true;
+        $i++;
+        continue;
+      }
+
+      if ($ch === '#') {
+        $inLineComment = true;
+        continue;
+      }
+
+      if ($ch === ':' && ($i === 0 || $query[$i - 1] !== ':') && $next !== '' && self::isPlaceholderStart($next)) {
+        $j = $i + 1;
+        while ($j < $length && self::isPlaceholderChar($query[$j])) {
+          $j++;
+        }
+
+        $name = substr($query, $i + 1, $j - ($i + 1));
+        $placeholders[] = [$i, $j - $i, $name];
+        $counts[$name] = ($counts[$name] ?? 0) + 1;
+        $i = $j - 1;
+      }
+    }
+
+    return [$placeholders, $counts];
+  }
+
+  private static function isPlaceholderStart(string $char): bool
+  {
+    return ($char >= 'a' && $char <= 'z')
+        || ($char >= 'A' && $char <= 'Z')
+        || $char === '_';
+  }
+
+  private static function isPlaceholderChar(string $char): bool
+  {
+    return self::isPlaceholderStart($char)
+        || ($char >= '0' && $char <= '9');
   }
 
   private static function buildOptions(array $options): array
